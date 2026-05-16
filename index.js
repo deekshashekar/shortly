@@ -1,11 +1,12 @@
+import "dotenv/config";
 import express from "express";
+import { prisma } from "./db.js";
+
 const app = express();
 
 app.use(express.json());
 
-const store = new Map();
-
-const generateUrl = () => {
+const generateCode = () => {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
   let code = "";
   for (let i = 0; i < 6; i++) {
@@ -14,17 +15,17 @@ const generateUrl = () => {
   return code;
 };
 
-app.post("/links", (req, res) => {
+app.post("/links", async (req, res) => {
   const url = req.body.url;
-  const code = generateUrl();
-  store.set(code, url);
-  res.json({ code });
+  const code = generateCode();
+  const link = await prisma.link.create({ data: { code, url } });
+  res.json({ code: link.code });
 });
 
-app.get("/:code", (req, res) => {
-  const url = store.get(req.params.code);
-  if (url) {
-    res.redirect(url);
+app.get("/:code", async (req, res) => {
+  const link = await prisma.link.findUnique({ where: { code: req.params.code } });
+  if (link) {
+    res.redirect(link.url);
   } else {
     res.status(404).json({ error: "Not found" });
   }
