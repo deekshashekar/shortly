@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import { z } from "zod";
+import bcrypt from "bcryptjs";
 import { prisma } from "./db.js";
 
 const app = express();
@@ -33,7 +34,9 @@ app.post("/links", async (req, res, next) => {
 
 app.get("/:code", async (req, res, next) => {
   try {
-    const link = await prisma.link.findUnique({ where: { code: req.params.code } });
+    const link = await prisma.link.findUnique({
+      where: { code: req.params.code },
+    });
     if (link) {
       res.redirect(link.url);
     } else {
@@ -44,13 +47,54 @@ app.get("/:code", async (req, res, next) => {
   }
 });
 
+const signupSchema = z.object({
+  email: z.string().email({ message: "Invalid email" }),
+  password: z
+    .string()
+    .min(8, { message: "Password must be at least 8 characters" }),
+});
+
+const loginSchema = z.object({
+  email: z.string().email({ message: "Invalid email" }),
+  password: z
+    .string()
+    .min(8, { message: "Password must be at least 8 characters" }),
+});
+
+app.post("/login", async (req, res, next) => {
+  try {
+    const { email, password } = loginSchema.parse(req.body);
+    const user = await prisma.user.findUnique({ where: { email } });
+    if (!user) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+    const valid = await bcrypt.compare(password, user.passwordHash);
+    if (!valid) {
+      return res.status(401).json({ error: "Invalid email or password" });
+    }
+    res.json({ token: "ok" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/signup", async (req, res, next) => {
+  try {
+    const { email, password } = signupSchema.parse(req.body);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({ data: { email, passwordHash } });
+    res.status(201).json({ id: user.id, email: user.email });
+  } catch (err) {
+    next(err);
+  }
+});
+
 app.use((err, req, res, next) => {
   if (err instanceof z.ZodError) {
     return res.status(400).json({ error: err.errors[0].message });
   }
-  // Prisma unique constraint violation
   if (err.code === "P2002") {
-    return res.status(409).json({ error: "Code already exists" });
+    return res.status(409).json({ error: "Email already exists" });
   }
   console.error(err);
   res.status(500).json({ error: "Internal server error" });
