@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { prisma } from "./db.js";
 
 const app = express();
@@ -17,15 +18,32 @@ const generateCode = () => {
   return code;
 };
 
+const requireAuth = (req, res, next) => {
+  const header = req.headers["authorization"];
+  if (!header || !header.startsWith("Bearer ")) {
+    return res.status(401).json({ error: "Missing or invalid token" });
+  }
+  const token = header.slice(7);
+  try {
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = payload;
+    next();
+  } catch {
+    res.status(401).json({ error: "Invalid or expired token" });
+  }
+};
+
 const linkSchema = z.object({
   url: z.string().url({ message: "Invalid URL" }),
 });
 
-app.post("/links", async (req, res, next) => {
+app.post("/links", requireAuth, async (req, res, next) => {
   try {
     const { url } = linkSchema.parse(req.body);
     const code = generateCode();
-    const link = await prisma.link.create({ data: { code, url } });
+    const link = await prisma.link.create({
+      data: { code, url, userId: req.user.sub },
+    });
     res.json({ code: link.code });
   } catch (err) {
     next(err);
@@ -49,16 +67,23 @@ app.get("/:code", async (req, res, next) => {
 
 const signupSchema = z.object({
   email: z.string().email({ message: "Invalid email" }),
-  password: z
-    .string()
-    .min(8, { message: "Password must be at least 8 characters" }),
+  password: z.string().min(8, { message: "Password must be at least 8 characters" }),
 });
 
 const loginSchema = z.object({
   email: z.string().email({ message: "Invalid email" }),
-  password: z
-    .string()
-    .min(8, { message: "Password must be at least 8 characters" }),
+  password: z.string().min(8, { message: "Password must be at least 8 characters" }),
+});
+
+app.post("/signup", async (req, res, next) => {
+  try {
+    const { email, password } = signupSchema.parse(req.body);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await prisma.user.create({ data: { email, passwordHash } });
+    res.status(201).json({ id: user.id, email: user.email });
+  } catch (err) {
+    next(err);
+  }
 });
 
 app.post("/login", async (req, res, next) => {
@@ -72,18 +97,23 @@ app.post("/login", async (req, res, next) => {
     if (!valid) {
       return res.status(401).json({ error: "Invalid email or password" });
     }
-    res.json({ token: "ok" });
+    const token = jwt.sign(
+      { sub: user.id, email: user.email },
+      process.env.JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+    res.json({ token });
   } catch (err) {
     next(err);
   }
 });
 
-app.post("/signup", async (req, res, next) => {
+app.get("/me/links", requireAuth, async (req, res, next) => {
   try {
-    const { email, password } = signupSchema.parse(req.body);
-    const passwordHash = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({ data: { email, passwordHash } });
-    res.status(201).json({ id: user.id, email: user.email });
+    const links = await prisma.link.findMany({
+      where: { userId: req.user.sub },
+    });
+    res.json(links);
   } catch (err) {
     next(err);
   }
