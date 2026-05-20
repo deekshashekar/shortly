@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { requireAuth } from "../middleware/requireAuth.js";
 import { createLink, findLinkByCode, getLinksByUser } from "../services/links.js";
+import { redis } from "../redis.js";
 
 export const linksRouter = Router();
 
@@ -30,12 +31,20 @@ linksRouter.get("/me/links", requireAuth, async (req, res, next) => {
 
 linksRouter.get("/:code", async (req, res, next) => {
   try {
-    const link = await findLinkByCode(req.params.code);
-    if (link) {
-      res.redirect(link.url);
-    } else {
-      res.status(404).json({ error: "Not found" });
+    const { code } = req.params;
+
+    const cached = await redis.get(`link:${code}`);
+    if (cached) {
+      console.log("CACHE HIT", code);
+      return res.redirect(cached);
     }
+
+    const link = await findLinkByCode(code);
+    if (!link) return res.status(404).json({ error: "Not found" });
+
+    await redis.set(`link:${code}`, link.url, "EX", 3600);
+    console.log("DB HIT", code);
+    res.redirect(link.url);
   } catch (err) {
     next(err);
   }
